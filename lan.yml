@@ -1,0 +1,155 @@
+---
+ - name: Network
+   hosts: all
+   become: true
+   
+   tasks:
+    - name: Set up NAT on inetRouter # Настройка NAT
+      block: 
+
+        - name: install iptables # установка iptables
+          yum:
+            name:
+            - iptables
+            - iptables-services
+            state: present
+            update_cache: true
+      
+        - name: copy iptables config # установка iptables
+          ansible.builtin.template: 
+            src: iptables
+            dest: /etc/sysconfig/iptables
+            owner: root
+            group: root
+            mode: 0600
+          notify: start iptables # вызов handlers для старта iptables
+
+        - name: reload iptables # перечитываем конфиг iptables
+          become: yes
+          shell: iptables-restore <  /etc/sysconfig/iptables
+
+      when: (ansible_hostname == "inetRouter") # все действия по настройке NAT выполняются на inetRouter
+  
+    - name: remov default gateway for eth0 servers and routers # отключаем на всех машинах кроме inetRouter маршрут по умолчани на интерфейсе eth0
+      lineinfile:
+        dest: /etc/sysconfig/network-scripts/ifcfg-eth0
+        line: DEFROUTE=no 
+      when: (ansible_hostname == "centralRouter") or 
+            (ansible_hostname == "centralServer") or
+            (ansible_hostname == "office1Router") or
+            (ansible_hostname == "office1Server") or
+            (ansible_hostname == "office2Router") or
+            (ansible_hostname == "office2Server") or
+            (ansible_hostname == "centralServer")
+
+    - name: add default gateway for centralRouter #  назначаем маршрут по умолчани для centralRouter на интерфейс eth1
+      lineinfile:
+        dest: /etc/sysconfig/network-scripts/ifcfg-eth1
+        line: GATEWAY=192.168.255.1 
+      when: (ansible_hostname == "centralRouter")
+
+    - name: add default gateway for office1Router # назначаем маршрут по умолчани для office1Router на интерфейс eth1
+      lineinfile:
+        dest: /etc/sysconfig/network-scripts/ifcfg-eth1
+        line: GATEWAY=192.168.255.9
+      notify: restart network                     # вызываем handler на перезапуск сетевых интерфейсов
+      when: (ansible_hostname == "office1Router")
+
+    - name: add default gateway for office1Server # назначаем маршрут по умолчани для office1Server на интерфейс eth1
+      lineinfile:
+        dest: /etc/sysconfig/network-scripts/ifcfg-eth1
+        line: GATEWAY=192.168.2.129
+      notify: restart network                     # вызываем handler на перезапуск сетевых интерфейсов
+      when: (ansible_hostname == "office1Server")
+
+    - name: add default gateway for office2Router # назначаем маршрут по умолчани для office2Router на интерфейс eth1
+      lineinfile:
+        dest: /etc/sysconfig/network-scripts/ifcfg-eth1
+        line: GATEWAY=192.168.255.5
+      notify: restart network                     # вызываем handler на перезапуск сетевых интерфейсов
+      when: (ansible_hostname == "office2Router")
+
+    - name: add default gateway for office2Server # назначаем маршрут по умолчани для office2Server на интерфейс eth1
+      lineinfile:
+        dest: /etc/sysconfig/network-scripts/ifcfg-eth1
+        line: GATEWAY=192.168.1.1
+      notify: restart network                     # вызываем handler на перезапуск сетевых интерфейсов
+      when: (ansible_hostname == "office2Server")
+
+    - name: add route and  default gateway for centralServer
+      block:                                          # блок tasks для centralServer
+        - name: add default gateway for centralServer # назначаем маршрут по умолчани для centralServer на интерфейс eth1
+          lineinfile:
+            dest: /etc/sysconfig/network-scripts/ifcfg-eth1
+            line: GATEWAY=192.168.0.1
+
+        - name: add route 2.128/26 for centralServer # указываем обратные маршруты сети Managers office1
+          lineinfile:
+            dest: /etc/sysconfig/network-scripts/route-eth1
+            line: 192.168.2.128/26 via 192.168.0.1
+
+        - name: add route 1.0/25 for centralServer # указываем обратные маршруты сети Dev office2
+          lineinfile:
+            dest: /etc/sysconfig/network-scripts/route-eth1
+            line: 192.168.1.0/25 via 192.168.0.1
+          notify: restart network                  # вызываем handler на перезапуск сетевых интерфейсов
+      when: (ansible_hostname == "centralServer")
+
+
+    - name: add route eth5 for centralRouter # указываем обратные маршруты для centralRouter сети Managers office1
+      lineinfile:
+        dest: /etc/sysconfig/network-scripts/route-eth5
+        line: 192.168.2.0/24 via 192.168.255.10
+      notify: restart network                # вызываем handler на перезапуск сетевых интерфейсов
+      when: (ansible_hostname == "centralRouter")
+
+    - name: add route eth6 for centralRouter # указываем обратные маршруты для centralRouter сети Dev office2
+      lineinfile:
+        dest: /etc/sysconfig/network-scripts/route-eth6
+        line: 192.168.1.0/25 via 192.168.255.6
+      notify: restart network                # вызываем handler на перезапуск сетевых интерфейсов
+      when: (ansible_hostname == "centralRouter")
+
+    - name: add route  for inetRouter
+      block:                                      # блок tasks для inetRouter
+        - name: add route 255.8/30 for inetRouter # указываем обратные маршруты для office1Router
+          lineinfile:
+            dest: /etc/sysconfig/network-scripts/route-eth1
+            line: 192.168.255.8/30 via 192.168.255.2
+
+        - name: add route 255.6/30 for inetRouter # указываем обратные маршруты для office2Router
+          lineinfile:
+            dest: /etc/sysconfig/network-scripts/route-eth1
+            line: 192.168.255.4/30 via 192.168.255.2
+
+        - name: add route 0.0/28 for inetRouter # указываем обратные маршруты для сети Directors
+          lineinfile:
+            dest: /etc/sysconfig/network-scripts/route-eth1
+            line: 192.168.0.0/28 via 192.168.255.2
+
+        - name: add route 2.128/26 for inetRouter # указываем обратные маршруты для сети Managers office1
+          lineinfile:
+            dest: /etc/sysconfig/network-scripts/route-eth1
+            line: 192.168.2.128/26 via 192.168.255.2
+
+        - name: add route 1.0/25 for inetRouter # указываем обратные маршруты для сети Dev office2
+          lineinfile:
+            dest: /etc/sysconfig/network-scripts/route-eth1
+            line: 192.168.1.0/25 via 192.168.255.2
+          notify: restart network               # вызываем handler на перезапуск сетевых интерфейсов
+      when: (ansible_hostname == "inetRouter")
+
+   handlers:
+    - name: start iptables # handler на запуск iptables
+      become: true
+      ansible.builtin.systemd:
+        service: iptables.service
+        state: started
+        enabled: true
+
+    - name: restart network # handler на запуск network
+      become: true
+      ansible.builtin.systemd:
+        name: network
+        state: restarted
+        enabled: true
